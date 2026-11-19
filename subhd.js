@@ -1,28 +1,37 @@
-
 const subtitleSource = {
   manifest: {
     schema: 1,
     id: "subhd",
     name: "SubHD",
-    version: "3.0.0",
+    version: "3.1.0",
     minimumHost: 1,
-    
-domains: [
-  "subhd.me",
-  "subhdtw.com",
-  "subhd.one",
-  "subhd.top",
-  "subhd.cc",
-  "subhd.tv",
-  "subhd.com"
-],
+    domains: [
+      "subhd.me",
+      "subhd.tv",
+      "subhd.com",
+      "subhd.one",
+      "subhd.top",
+      "subhd.cc",
+      "subhdtw.com"
+    ],
     languages: ["zh-TW", "zh-Hans", "zh", "en"],
     credentials: []
   },
 
   host: "https://subhd.me",
 
-  clean: function(s) {
+  // 備援網域:主網域失敗(無內容 / 4xx / 5xx / 驗證頁)時依序嘗試
+  hosts: [
+    "https://subhd.me",
+    "https://subhd.tv",
+    "https://subhd.com",
+    "https://subhd.one",
+    "https://subhd.top",
+    "https://subhd.cc",
+    "https://subhdtw.com"
+  ],
+
+  clean: function (s) {
     return String(s || "")
       .replace(/<script[\s\S]*?<\/script>/gi, "")
       .replace(/<style[\s\S]*?<\/style>/gi, "")
@@ -35,7 +44,7 @@ domains: [
       .trim();
   },
 
-  abs: function(u) {
+  abs: function (u) {
     if (!u) return "";
     u = u.trim();
     if (u.startsWith("//")) return "https:" + u;
@@ -44,42 +53,63 @@ domains: [
     return this.host + "/" + u;
   },
 
-  
-getHTML: async function(url) {
-  try {
-    const r = await $http.get(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile Safari/604.1",
-        "Accept": "text/html,application/xhtml+xml"
-      },
-      timeout: 20000
-    });
+  pathOf: function (url) {
+    return String(url).replace(/^https?:\/\/[^\/]+/i, "") || "/";
+  },
 
-    if (!r || !r.data) {
-      throw new Error("HTTP 沒有回傳網頁內容");
+  isSubhdURL: function (url) {
+    return /^https?:\/\/([^\/]+\.)?subhd[^\/]*\//i.test(url);
+  },
+
+  getHTML: async function (url) {
+    const path = this.pathOf(url);
+    const hosts = [this.host].concat(this.hosts.filter(h => h !== this.host));
+    const errors = [];
+
+    for (const host of hosts) {
+      try {
+        const r = await $http.get(host + path, {
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+            "Accept":
+              "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
+            "Referer": host + "/"
+          },
+          timeout: 20000
+        });
+
+        const status = r && (r.status || r.statusCode);
+        if (status && status >= 400) throw new Error("HTTP " + status);
+
+        // 相容不同 $http 回傳格式
+        let body = null;
+        if (typeof r === "string") body = r;
+        else if (r) body = r.data != null ? r.data : (r.body != null ? r.body : r.text);
+
+        if (body == null || String(body).trim() === "") {
+          throw new Error("HTTP 沒有回傳網頁內容" + (status ? "(狀態 " + status + ")" : ""));
+        }
+
+        const html = typeof body === "string" ? body : String(body);
+
+        if (/captcha|cloudflare|access denied|人机验证|安全验证|just a moment/i.test(html) &&
+            html.length < 100000) {
+          throw new Error("收到網站驗證頁,並非搜尋結果");
+        }
+
+        this.host = host; // 記住可用網域
+        return html;
+      } catch (e) {
+        errors.push(host.replace("https://", "") + ":" + String(e && e.message ? e.message : e));
+      }
     }
 
-    const html = String(r.data);
+    throw new Error("SubHD 診斷:所有網域皆失敗 | " + errors.join(" ; ") + " | 路徑:" + path);
+  },
 
-    if (/captcha|cloudflare|access denied|人机验证|安全验证/i.test(html) &&
-        html.length < 100000) {
-      throw new Error("收到網站驗證頁，並非搜尋結果");
-    }
-
-    return html;
-
-  } catch (e) {
-    const detail = String(e && e.message ? e.message : e);
-
-    throw new Error(
-      "SubHD 診斷：" + detail +
-      " | 請求網址：" + url
-    );
-  }
-},
-
-
-  search: async function(hint, context) {
+  search: async function (hint, context) {
     const title = String(hint.title || "").trim();
     if (!title) return [];
 
@@ -90,13 +120,12 @@ getHTML: async function(url) {
                "E" + String(hint.episode).padStart(2, "0");
     }
 
-    const url = this.host + "/search/" + encodeURIComponent(query);
-    const html = await this.getHTML(url);
-
-    const results = [];
-    const seen = {};
+    const html = await this.getHTML(this.host + "/search/" + encodeURIComponent(query));
 
     const re = /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+    const detail = [];
+    const generic = [];
+    const seen = {};
     let m;
 
     while ((m = re.exec(html)) !== null) {
@@ -104,29 +133,36 @@ getHTML: async function(url) {
       const titleText = this.clean(m[2]);
 
       if (!titleText || titleText.length < 3) continue;
-      if (/^(首页|登录|注册|搜索|下载|论坛|帮助|更多|下一页|上一页)$/i.test(titleText)) continue;
-      if (/javascript:|mailto:/i.test(href)) continue;
-      if (/\.srt$|\.ass$|\.ssa$|\.vtt$/i.test(href)) continue;
+      if (/^(首页|首頁|登录|登入|注册|註冊|搜索|搜尋|下载|下載|论坛|論壇|帮助|幫助|更多|下一页|下一頁|上一页|上一頁)$/i.test(titleText)) continue;
+      if (/^(javascript:|mailto:|#)/i.test(href)) continue;
+      if (/\.(srt|ass|ssa|vtt)$/i.test(href)) continue;
 
       const fullURL = this.abs(href);
-
-      if (!/subhd/i.test(fullURL)) continue;
+      if (!this.isSubhdURL(fullURL)) continue;
       if (seen[fullURL]) continue;
       seen[fullURL] = true;
 
-      results.push({
+      const item = {
         id: fullURL,
         title: titleText,
         language: "zh",
         format: "srt",
         url: fullURL
-      });
+      };
+
+      // 字幕詳情頁通常含數字 ID(如 /detail/123456 或 /ar0/123456)
+      if (/\/(detail|ar0|sub|zimu)\/\w+/i.test(fullURL) || /\/\d{4,}(?:[\/?#]|$)/.test(fullURL)) {
+        detail.push(item);
+      } else {
+        generic.push(item);
+      }
     }
 
-    return results.slice(0, 40);
+    // 優先回傳詳情頁連結,避免導覽列連結混入結果
+    return (detail.length ? detail : generic).slice(0, 40);
   },
 
-  resolve: async function(candidate, context) {
+  resolve: async function (candidate, context) {
     const detailURL = candidate.url || candidate.id;
     if (!detailURL) throw new Error("缺少字幕詳情頁網址");
 
@@ -137,16 +173,10 @@ getHTML: async function(url) {
     let m;
 
     while ((m = re.exec(html)) !== null) {
-      const href = m[1];
-      const text = this.clean(m[2]);
-      const fullURL = this.abs(href);
-
-      if (/\.(srt|ass|ssa|vtt)(?:\?|$)/i.test(fullURL)) {
-        links.push({
-          url: fullURL,
-          text: text,
-          format: (fullURL.match(/\.(srt|ass|ssa|vtt)/i) || ["", "srt"])[1]
-        });
+      const fullURL = this.abs(m[1]);
+      const ext = fullURL.match(/\.(srt|ass|ssa|vtt)(?:\?|$)/i);
+      if (ext) {
+        links.push({ url: fullURL, text: this.clean(m[2]), format: ext[1].toLowerCase() });
       }
     }
 
@@ -170,6 +200,6 @@ getHTML: async function(url) {
       };
     }
 
-    throw new Error("詳情頁未找到直接字幕下載連結");
+    throw new Error("詳情頁未找到直接字幕下載連結(SubHD 多為壓縮包/需驗證下載)");
   }
 };
