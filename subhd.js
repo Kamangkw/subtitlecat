@@ -94,9 +94,17 @@ const subtitleSource = {
 
         const html = typeof body === "string" ? body : String(body);
 
-        if (/captcha|cloudflare|access denied|人机验证|安全验证|just a moment/i.test(html) &&
-            html.length < 100000) {
-          throw new Error("收到網站驗證頁,並非搜尋結果");
+        // 只在出現明確的挑戰頁特徵,且頁面沒有任何 SubHD 內容連結時才視為驗證頁,
+        // 避免正常頁面因含有 captcha / cloudflare 字樣而被誤判
+        const challenge =
+          /just a moment|checking your browser|cf-chl|_cf_chl_opt|attention required|access denied|人机验证|安全验证|請稍候|正在驗證/i.test(html);
+        const hasContent = /href\s*=\s*["'][^"']*\/(detail|ar0|sub|zimu|search)\//i.test(html);
+        if (challenge && !hasContent) {
+          const t = this.clean((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || "");
+          throw new Error(
+            "收到網站驗證頁(標題:" + (t || "無") + ";長度:" + html.length +
+            ";開頭:" + this.clean(html).slice(0, 60) + ")"
+          );
         }
 
         this.host = host; // 記住可用網域
