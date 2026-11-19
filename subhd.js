@@ -134,6 +134,7 @@ const subtitleSource = {
     const detail = [];
     const generic = [];
     const seen = {};
+    const samples = [];
     const tokens = title.toLowerCase().split(/\s+/).filter(t => t.length > 1);
     let m;
 
@@ -150,9 +151,12 @@ const subtitleSource = {
       if (!this.isSubhdURL(fullURL)) continue;
       if (seen[fullURL]) continue;
 
-      // 相關度過濾:連結文字或其後 500 字內必須包含搜尋字詞,排除熱門推薦與導覽連結
-      const nearby = (titleText + " " + this.clean(html.substr(m.index, 500))).toLowerCase();
-      if (tokens.length && !tokens.every(t => nearby.indexOf(t) !== -1)) continue;
+      if (samples.length < 6) samples.push(titleText.slice(0, 18) + "→" + this.pathOf(fullURL).slice(0, 24));
+
+      // 相關度過濾:只比對連結自己的文字與 title 屬性,排除熱門推薦與導覽連結
+      const attrTitle = (m[0].match(/title\s*=\s*["']([^"']*)["']/i) || [])[1] || "";
+      const hay = (titleText + " " + attrTitle).toLowerCase();
+      if (tokens.length && !tokens.every(t => hay.indexOf(t) !== -1)) continue;
 
       seen[fullURL] = true;
 
@@ -180,7 +184,8 @@ const subtitleSource = {
         "SubHD v3.2 診斷:無相符結果 | 網域:" + this.host +
         " | 頁面標題:" + (pageTitle || "無") +
         " | 頁面長度:" + html.length +
-        " | 內容開頭:" + this.clean(html).slice(0, 120)
+        " | 連結樣本:" + (samples.join(" ; ") || "無") +
+        " | 內容開頭:" + this.clean(html).slice(0, 80)
       );
     }
 
