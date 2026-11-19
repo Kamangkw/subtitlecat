@@ -126,6 +126,7 @@ const subtitleSource = {
     const detail = [];
     const generic = [];
     const seen = {};
+    const tokens = title.toLowerCase().split(/\s+/).filter(t => t.length > 1);
     let m;
 
     while ((m = re.exec(html)) !== null) {
@@ -140,6 +141,11 @@ const subtitleSource = {
       const fullURL = this.abs(href);
       if (!this.isSubhdURL(fullURL)) continue;
       if (seen[fullURL]) continue;
+
+      // 相關度過濾:連結文字或其後 500 字內必須包含搜尋字詞,排除熱門推薦與導覽連結
+      const nearby = (titleText + " " + this.clean(html.substr(m.index, 500))).toLowerCase();
+      if (tokens.length && !tokens.every(t => nearby.indexOf(t) !== -1)) continue;
+
       seen[fullURL] = true;
 
       const item = {
