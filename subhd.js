@@ -3,7 +3,7 @@ const subtitleSource = {
     schema: 1,
     id: "subhd",
     name: "SubHD",
-    version: "3.1.0",
+    version: "3.2.0",
     minimumHost: 1,
     domains: [
       "subhd.me",
@@ -164,8 +164,20 @@ const subtitleSource = {
       }
     }
 
+    const out = (detail.length ? detail : generic).slice(0, 40);
+
+    if (!out.length) {
+      const pageTitle = this.clean((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || "");
+      throw new Error(
+        "SubHD v3.2 診斷:無相符結果 | 網域:" + this.host +
+        " | 頁面標題:" + (pageTitle || "無") +
+        " | 頁面長度:" + html.length +
+        " | 內容開頭:" + this.clean(html).slice(0, 120)
+      );
+    }
+
     // 優先回傳詳情頁連結,避免導覽列連結混入結果
-    return (detail.length ? detail : generic).slice(0, 40);
+    return out;
   },
 
   resolve: async function (candidate, context) {
