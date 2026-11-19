@@ -6,7 +6,16 @@ const subtitleSource = {
     name: "SubHD",
     version: "3.0.0",
     minimumHost: 1,
-    domains: ["subhd.me", "subhd.one", "subhdtw.com", "subhd.top", "subhd.cc"],
+    
+domains: [
+  "subhd.me",
+  "subhdtw.com",
+  "subhd.one",
+  "subhd.top",
+  "subhd.cc",
+  "subhd.tv",
+  "subhd.com"
+],
     languages: ["zh-TW", "zh-Hans", "zh", "en"],
     credentials: []
   },
