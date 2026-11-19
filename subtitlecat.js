@@ -1,140 +1,284 @@
-var rule = {
-  title: 'SubtitleCat 字幕',
-  host: 'https://www.subtitlecat.com',
-  homeUrl: '/index.php?search=',
-  url: '/index.php?search=fy',
-  searchUrl: '/index.php?search=**',
-  searchable: 1,
-  quickSearch: 1,
-  filter: 0,
-  headers: {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-  },
-  
-  // 搜尋字幕
-  searchContent: function(key, quick, pg) {
-    var url = this.host + '/index.php?search=' + encodeURIComponent(key);
-    var html = request(url, {
-      headers: this.headers
-    });
-    
-    var list = [];
-    var re = /href=["']((?:\/)?subs\/[^"']+\.html?)["'][^>]*>([\s\S]*?)<\/a>/gi;
-    var m;
-    
-    while ((m = re.exec(html)) !== null) {
-      var link = m[1];
-      var name = m[2]
-        .replace(/<[^>]+>/g, '')
-        .replace(/&nbsp;/g, ' ')
-        .replace(/&amp;/g, '&')
-        .trim();
-      
-      if (!name) continue;
-      
-      if (link.indexOf('http') !== 0) {
-        link = this.host + (link.charAt(0) === '/' ? '' : '/') + link;
-      }
-      
-      list.push({
-        vod_id: link,
-        vod_name: name,
-        vod_pic: '',
-        vod_remarks: 'SubtitleCat'
-      });
-    }
-    
-    // 去重
-    var seen = {};
-    list = list.filter(function(item) {
-      if (seen[item.vod_id]) return false;
-      seen[item.vod_id] = true;
-      return true;
-    });
-    
-    return JSON.stringify({
-      list: list
-    });
-  },
-  
-  // 詳情頁：提取各語言字幕
-  detailContent: function(ids) {
-    var id = ids[0];
-    var html = request(id, {
-      headers: this.headers
-    });
-    
-    var list = [];
-    var re = /href=["']([^"']+\.srt(?:\?[^"']*)?)["'][^>]*>/gi;
-    var m;
-    
-    while ((m = re.exec(html)) !== null) {
-      var link = m[1];
-      
-      if (link.indexOf('http') !== 0) {
-        link = this.host + (link.charAt(0) === '/' ? '' : '/') + link;
-      }
-      
-      var lang = link.match(/[-_]([a-z]{2,3}(?:-[a-z]{2})?)\.srt/i);
-      var name = lang ? lang[1].toUpperCase() : '字幕檔';
-      
-      list.push({
-        name: name,
-        url: link
-      });
-    }
-    
-    // 解析頁面中的語言下載按鈕
-    var btnRe = /id=["']download_([a-z]+)["'][\s\S]*?href=["']([^"']+\.srt[^"']*)["']/gi;
-    while ((m = btnRe.exec(html)) !== null) {
-      var code = m[1];
-      var link2 = m[2];
-      
-      if (link2.indexOf('http') !== 0) {
-        link2 = this.host + (link2.charAt(0) === '/' ? '' : '/') + link2;
-      }
-      
-      var exists = list.some(function(x) {
-        return x.url === link2;
-      });
-      
-      if (!exists) {
-        list.push({
-          name: code.toUpperCase(),
-          url: link2
+// SubtitleCat - Yingxia Subtitle Source
+// Protocol: Yingxia SubtitleProvider schema 1
+
+const subtitleSource = {
+    manifest: {
+        schema: 1,
+        id: "subtitlecat",
+        name: "SubtitleCat",
+        version: "1.0.1",
+        minimumHost: 1,
+        domains: [
+            "www.subtitlecat.com",
+            "subtitlecat.com"
+        ],
+        languages: [
+            "zh-TW",
+            "zh-Hant",
+            "zh",
+            "en"
+        ],
+        credentials: []
+    },
+
+    // ------------------------------------------
+    // 工具：文字清理
+    // ------------------------------------------
+    cleanText: function (s) {
+        return String(s || "")
+            .replace(/<script[\s\S]*?<\/script>/gi, "")
+            .replace(/<style[\s\S]*?<\/style>/gi, "")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/&nbsp;/gi, " ")
+            .replace(/&amp;/gi, "&")
+            .replace(/&quot;/gi, '"')
+            .replace(/&#39;/gi, "'")
+            .replace(/&#(\d+);/g, function (_, n) {
+                return String.fromCharCode(Number(n));
+            })
+            .replace(/\s+/g, " ")
+            .trim();
+    },
+
+    // ------------------------------------------
+    // 工具：網址補全
+    // ------------------------------------------
+    absoluteURL: function (url) {
+        if (!url) return "";
+        url = String(url).trim();
+
+        if (/^https?:\/\//i.test(url)) return url;
+        if (url.indexOf("//") === 0) return "https:" + url;
+
+        return "https://www.subtitlecat.com" +
+            (url.charAt(0) === "/" ? url : "/" + url);
+    },
+
+    // ------------------------------------------
+    // 工具：語言判斷
+    // ------------------------------------------
+    languageFromText: function (text) {
+        text = String(text || "").toLowerCase();
+
+        if (/traditional|繁體|繁体|zh[-_]?tw|zh[-_]?hk|cht/.test(text)) {
+            return "zh-TW";
+        }
+
+        if (/simplified|简体|簡體|zh[-_]?cn|chs/.test(text)) {
+            return "zh-CN";
+        }
+
+        if (/chinese|中文|mandarin|zh/.test(text)) {
+            return "zh";
+        }
+
+        if (/english|eng|en[-_]/.test(text)) {
+            return "en";
+        }
+
+        return "";
+    },
+
+    // ------------------------------------------
+    // 搜尋
+    // ------------------------------------------
+    search: async function (hint, context) {
+        const title = (hint && hint.title) || "";
+        const year = (hint && hint.year) || "";
+
+        if (!title.trim()) {
+            throw new SubtitleError("noResults", "沒有提供影片名稱");
+        }
+
+        let query = title.trim();
+
+        // 加上年份，提高電影搜尋精度
+        if (year) query += " " + year;
+
+        const url =
+            "https://www.subtitlecat.com/index.php?search=" +
+            encodeURIComponent(query);
+
+        let response;
+
+        try {
+            response = await $http.get(url, {
+                headers: {
+                    "User-Agent":
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                    "Accept":
+                        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+                },
+                timeout: 8000
+            });
+        } catch (e) {
+            throw new SubtitleError(
+                "failed",
+                "SubtitleCat 搜尋請求失敗"
+            );
+        }
+
+        if (!response.ok) {
+            throw SubtitleError.from(response, "搜尋失敗");
+        }
+
+        const html = response.text || "";
+        const results = [];
+        const seen = {};
+
+        // 搜尋結果頁的字幕詳情連結
+        const anchorRe =
+            /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+
+        let m;
+
+        while ((m = anchorRe.exec(html)) !== null) {
+            const href = m[1];
+            const rawTitle = m[2];
+
+            // 只接受 SubtitleCat 字幕頁
+            if (!/\/subs\//i.test(href)) continue;
+            if (!/\.html?(?:[?#]|$)/i.test(href)) continue;
+
+            const name = this.cleanText(rawTitle);
+
+            if (!name || name.length < 2) continue;
+
+            const detailURL = this.absoluteURL(href);
+
+            if (seen[detailURL]) continue;
+            seen[detailURL] = true;
+
+            results.push({
+                id: detailURL,
+                title: name,
+                url: detailURL,
+                language: "",
+                format: "srt",
+                downloads: [],
+                token: {
+                    detailURL: detailURL
+                }
+            });
+        }
+
+        if (!results.length) {
+            throw new SubtitleError(
+                "noResults",
+                "SubtitleCat 沒有找到字幕，或搜尋頁格式已變更"
+            );
+        }
+
+        return results.slice(0, 20);
+    },
+
+    // ------------------------------------------
+    // 解析字幕下載
+    // ------------------------------------------
+    resolve: async function (candidate, context) {
+        const detailURL =
+            (candidate && candidate.token &&
+                candidate.token.detailURL) ||
+            (candidate && candidate.url) ||
+            (candidate && candidate.id);
+
+        if (!detailURL) {
+            throw new SubtitleError(
+                "incompatible",
+                "字幕結果沒有詳情頁網址"
+            );
+        }
+
+        let response;
+
+        try {
+            response = await $http.get(detailURL, {
+                headers: {
+                    "User-Agent":
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                    "Referer": "https://www.subtitlecat.com/"
+                },
+                timeout: 8000
+            });
+        } catch (e) {
+            throw new SubtitleError(
+                "downloadFailed",
+                "字幕詳情頁請求失敗"
+            );
+        }
+
+        if (!response.ok) {
+            throw SubtitleError.from(response, "字幕頁解析失敗");
+        }
+
+        const html = response.text || "";
+        const files = [];
+        const seen = {};
+
+        // 解析頁面上的字幕下載連結
+        const anchorRe =
+            /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+
+        let m;
+
+        while ((m = anchorRe.exec(html)) !== null) {
+            const href = m[1];
+            const label = this.cleanText(m[2]);
+
+            // SRT / VTT / ZIP
+            if (!/\.(srt|vtt|zip)(?:[?#]|$)/i.test(href)) {
+                continue;
+            }
+
+            const downloadURL = this.absoluteURL(href);
+
+            if (seen[downloadURL]) continue;
+            seen[downloadURL] = true;
+
+            const lang = this.languageFromText(
+                label + " " + href
+            );
+
+            files.push({
+                url: downloadURL,
+                name: label || "SubtitleCat Subtitle",
+                language: lang,
+                format: (href.match(/\.(srt|vtt|zip)/i) || [])[1] ||
+                    "srt"
+            });
+        }
+
+        if (!files.length) {
+            throw new SubtitleError(
+                "downloadFailed",
+                "詳情頁沒有找到可用字幕下載連結"
+            );
+        }
+
+        // 語言排序：繁體中文優先
+        files.sort(function (a, b) {
+            const score = function (x) {
+                if (x.language === "zh-TW") return 100;
+                if (x.language === "zh") return 80;
+                if (x.language === "zh-CN") return 60;
+                if (x.language === "en") return 30;
+                return 0;
+            };
+
+            return score(b) - score(a);
         });
-      }
+
+        const selected = files[0];
+
+        return {
+            url: selected.url,
+            headers: {
+                "User-Agent":
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "Referer": detailURL
+            },
+            name: selected.name || candidate.title || "SubtitleCat",
+            format: selected.format || "srt"
+        };
     }
-    
-    var seen = {};
-    list = list.filter(function(x) {
-      if (seen[x.url]) return false;
-      seen[x.url] = true;
-      return true;
-    });
-    
-    var vod = {
-      vod_id: id,
-      vod_name: 'SubtitleCat 字幕下載',
-      vod_pic: '',
-      vod_content: '選擇字幕語言下載',
-      vod_play_from: '字幕下載',
-      vod_play_url: list.map(function(x) {
-        return x.name + '$' + x.url;
-      }).join('#')
-    };
-    
-    return JSON.stringify({
-      list: [vod]
-    });
-  },
-  
-  // 將字幕下載網址交給播放器/來源播放解析
-  playerContent: function(flag, id, vip) {
-    return JSON.stringify({
-      parse: 0,
-      url: id,
-      header: this.headers
-    });
-  }
 };
