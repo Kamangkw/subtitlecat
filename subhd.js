@@ -162,7 +162,7 @@ const subtitleSource = {
 
       const item = {
         id: fullURL,
-        title: titleText + " [v3.2.1]",
+        title: titleText,
         language: "zh",
         format: "srt",
         url: fullURL
@@ -231,6 +231,22 @@ const subtitleSource = {
       };
     }
 
-    throw new Error("詳情頁未找到直接字幕下載連結(SubHD 多為壓縮包/需驗證下載)");
+    // 收集詳情頁上與下載有關的連結,供診斷(SubHD 多為壓縮包/需驗證下載)
+    const hints = [];
+    const re2 = /<(a|button)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+    let k;
+    while ((k = re2.exec(html)) !== null && hints.length < 6) {
+      const tag = k[0].slice(0, 200);
+      if (/download|down|zip|rar|7z|attach|file|下载|下載/i.test(tag) || /下载|下載/.test(this.clean(k[2]))) {
+        const h = (tag.match(/(?:href|data-[\w-]+)\s*=\s*["']([^"']*)["']/i) || [])[1] || "";
+        hints.push(this.clean(k[2]).slice(0, 12) + "→" + h.slice(0, 40));
+      }
+    }
+
+    throw new Error(
+      "詳情頁未找到直接字幕下載連結(SubHD 多為壓縮包/需驗證下載)" +
+      " | 下載相關元素:" + (hints.join(" ; ") || "無") +
+      " | 頁面長度:" + html.length
+    );
   }
 };
