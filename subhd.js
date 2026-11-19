@@ -162,7 +162,7 @@ const subtitleSource = {
 
       const item = {
         id: fullURL,
-        title: titleText,
+        title: titleText + " [v3.2.1]",
         language: "zh",
         format: "srt",
         url: fullURL
