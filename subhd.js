@@ -44,7 +44,9 @@ domains: [
     return this.host + "/" + u;
   },
 
-  getHTML: async function(url) {
+  
+getHTML: async function(url) {
+  try {
     const r = await $http.get(url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile Safari/604.1",
@@ -54,18 +56,28 @@ domains: [
     });
 
     if (!r || !r.data) {
-      throw new Error("SubHD 沒有回傳網頁內容");
+      throw new Error("HTTP 沒有回傳網頁內容");
     }
 
     const html = String(r.data);
 
     if (/captcha|cloudflare|access denied|人机验证|安全验证/i.test(html) &&
         html.length < 100000) {
-      throw new Error("SubHD 網站驗證／阻擋請求，暫時無法搜尋");
+      throw new Error("收到網站驗證頁，並非搜尋結果");
     }
 
     return html;
-  },
+
+  } catch (e) {
+    const detail = String(e && e.message ? e.message : e);
+
+    throw new Error(
+      "SubHD 診斷：" + detail +
+      " | 請求網址：" + url
+    );
+  }
+},
+
 
   search: async function(hint, context) {
     const title = String(hint.title || "").trim();
